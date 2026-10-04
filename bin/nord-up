@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Run nord-up straight from this source tree.
+
+Editable: there is nothing to build, so the next invocation picks up whatever is
+in ``src/nord_up``.  Put it on your PATH with a symlink:
+
+    ln -s "$PWD/bin/nord-up" ~/.local/bin/nord-up
+
+or install the package (``pip install -e .``), which generates an equivalent
+console script.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from nord_up.cli import main  # noqa: E402  (needs the sys.path bootstrap above)
+
+if __name__ == "__main__":
+    sys.exit(main())
