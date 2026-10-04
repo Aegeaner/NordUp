@@ -68,9 +68,9 @@ environment:
 examples:
   sudo -E nord-up -c <country>      connect, print the link and return
   sudo -E nord-up -c <country> -f   stay attached; Ctrl+C disconnects
-  nord-up --status                  show the live connection
+  nord-up -s                        show the live connection
   nord-up -d                        disconnect and clean up
-  nord-up --list-countries
+  nord-up -l                        list countries
   nord-up -c <country> --dry-run    print the config, touch nothing
 """
 
@@ -90,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="ISO country code or country name",
     )
     parser.add_argument(
+        "-l",
         "--list-countries",
         action="store_true",
         help="print the countries NordVPN offers (code, id, name) and exit",
@@ -101,6 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="bring the interface down and delete every artifact",
     )
     parser.add_argument(
+        "-s",
         "--status",
         action="store_true",
         help="print the live connection, if any (exit 1 when disconnected)",

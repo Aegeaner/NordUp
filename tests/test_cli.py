@@ -77,6 +77,16 @@ def test_parser_defaults_and_token_precedence(monkeypatch: pytest.MonkeyPatch) -
         resolve_token(build_parser().parse_args([]))
 
 
+def test_short_flags_alias_the_long_ones() -> None:
+    for short, attribute in (
+        ("-l", "list_countries"),
+        ("-s", "status"),
+        ("-d", "disconnect"),
+        ("-f", "foreground"),
+    ):
+        assert getattr(build_parser().parse_args([short]), attribute) is True
+
+
 def test_options_validate_country_dns_and_server_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NORD_TOKEN", "tok")
     parse = build_parser().parse_args

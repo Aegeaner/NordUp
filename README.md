@@ -23,9 +23,9 @@ pip install -e .                                # or install the package
 | Connect, fastest server anywhere | `sudo -E nord-up` |
 | Connect to a country | `sudo -E nord-up -c <code\|name>` |
 | Stay attached instead of returning | `sudo -E nord-up -c <country> -f` |
-| Show the live connection | `nord-up --status` |
+| Show the live connection | `nord-up -s` |
 | Disconnect and clean up | `nord-up -d` |
-| List countries (no token needed) | `nord-up --list-countries` |
+| List countries (no token needed) | `nord-up -l` |
 | Print the config, no root, no tunnel | `nord-up -c <country> --dry-run` |
 | Another resolver, or none at all | `--dns 10.0.0.1` / `--no-dns` |
 | More failover candidates | `--servers 10` |
