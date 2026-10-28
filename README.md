@@ -3,9 +3,9 @@
 Stateless NordVPN **NordLynx** (WireGuard) connector for Linux.
 
 A run asks the live API for the fastest servers, renders a config into a RAM
-workspace, pins `DNS` to the local resolver (DNSCrypt-proxy on `127.0.0.1`),
-brings the link up with `wg-quick` as `nordlynx_<cc>`, prints it and returns.
-`nord-up -d` disconnects and deletes every artifact.
+workspace, optionally pins a resolver, brings the link up with `wg-quick` as
+`nordlynx_<cc>`, prints it and returns. `nord-up -d` disconnects and deletes
+every artifact.
 
 Needs `httpx`, `wireguard-tools` (`wg-quick`) and `iproute2` (`ip`).
 
@@ -27,7 +27,8 @@ pip install -e .                                # or install the package
 | Disconnect and clean up | `nord-up -d` |
 | List countries (no token needed) | `nord-up -l` |
 | Print the config, no root, no tunnel | `nord-up -c <country> --dry-run` |
-| Another resolver, or none at all | `--dns 10.0.0.1` / `--no-dns` |
+| Pin a resolver (default: leave DNS alone) | `--dns 10.0.0.1` |
+| Full-MTU path / unusual path | `--mtu 1420` / `--mtu 1280` |
 | More failover candidates | `--servers 10` |
 
 The token comes from `NORD_TOKEN` or `--token`; `sudo -E` keeps it across sudo.
@@ -45,11 +46,39 @@ The token comes from `NORD_TOKEN` or `--token`; `sudo -E` keeps it across sudo.
 
 ### DNS
 
-NordVPN hands out public resolvers, which would bypass a local stub, cache or
-filter; `--dns` (by default the local DNSCrypt-proxy) is pinned into every managed
-config first. When `/etc/resolv.conf` already resolves *only* through that
-address the rewrite is skipped, keeping wg-quick's `resolvconf` plumbing out of
-the picture.
+By default the generated config carries no `DNS` directive: `wg-quick` leaves
+`/etc/resolv.conf` alone, so the resolver the network handed out (Wi-Fi DHCP,
+systemd-resolved, ...) keeps working. This also keeps wg-quick's `resolvconf`
+plumbing out of the picture — it otherwise needs a working systemd-resolved or
+openresolv backend and fails the whole `up` when neither is available.
+
+`--dns ADDR` opts into pinning: NordVPN's public resolvers are replaced by `ADDR`
+in every managed config, for example a local DNSCrypt-proxy on `127.0.0.1`.
+When `/etc/resolv.conf` already resolves *only* through `ADDR` the rewrite is
+skipped, since it would change nothing. Otherwise wg-quick applies the pin
+through `resolvconf`, so that path needs systemd-resolved or openresolv.
+
+### MTU
+
+The generated config pins `MTU = 1392`. WireGuard's outer packet adds 60 bytes
+over an IPv4 endpoint, so 1392 leaves a 1452-byte packet — fitting the smallest
+common WAN path (PPPoE 1492, DS-Lite 1452). `wg-quick`'s own derivation
+(physical MTU - 80) assumes the whole path is 1500 and silently blackholes
+larger packets behind a reduced-MTU WAN: the link looks up, pings and local DNS
+work, but TLS handshakes stall.
+
+Raise it with `--mtu 1420` on a full-MTU path, or lower it to `--mtu 1280` on an
+unusual one. The path MTU can be measured with
+`ping -M do -s <payload> <endpoint>`: the largest payload that succeeds plus 28
+is the path MTU, and the link MTU is 60 less.
+
+### Upgrading from 1.x
+
+1.x pinned `127.0.0.1` (a local DNSCrypt-proxy) by default and left the MTU to
+`wg-quick`. That broke resolution whenever nothing listened there, pushed
+wg-quick through `resolvconf`, and blackholed traffic on reduced-MTU paths. 2.0
+makes DNS opt-in (`--dns 127.0.0.1` restores the old behaviour) and pins a
+safe 1392-byte MTU (`--mtu 1420` restores the old throughput on full-MTU paths).
 
 ## Exit codes
 

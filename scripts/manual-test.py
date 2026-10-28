@@ -233,7 +233,8 @@ def check_foreground_and_failover(api: MockApi, *, verbose: bool) -> bool:
                 text = sandbox.config.read_text() if sandbox.config.exists() else ""
                 expected = ENDPOINT_A if ups == 1 else ENDPOINT_B
                 checks.ok(f"{label}: {server} selected", f"Endpoint = {expected}:51820" in text)
-                checks.ok(f"{label}: DNS pinned in the workspace config", "DNS = 127.0.0.1" in text)
+                checks.ok(f"{label}: DNS left alone by default", "DNS =" not in text)
+                checks.ok(f"{label}: default MTU 1392", "MTU = 1392" in text)
                 checks.ok(f"{label}: private key written", PRIVATE_KEY in text)
 
                 process.send_signal(signal.SIGINT)
@@ -288,23 +289,48 @@ def check_async_status_disconnect(api: MockApi, *, verbose: bool) -> bool:
 
 
 def check_dns_policies(api: MockApi, *, verbose: bool) -> bool:
-    """A foreign resolver is pinned; the local stub is left alone."""
+    """DNS is opt-in; an explicit pin is skipped when it is already the resolver."""
     checks = Checks("C: DNS policy", verbose)
-    for resolver, pinned in (("203.0.113.53", True), ("127.0.0.1", False)):
+    for extra, resolver, pinned in (
+        ((), "203.0.113.53", False),
+        (("--dns", "127.0.0.1"), "203.0.113.53", True),
+        (("--dns", "127.0.0.1"), "127.0.0.1", False),
+    ):
         sandbox = Sandbox(resolver=resolver)
+        label = f"--dns {extra[1]}" if extra else "default"
         try:
-            result = sandbox.run("--dry-run", "--api-base", api.base_url)
+            result = sandbox.run("--dry-run", "--api-base", api.base_url, *extra)
             if verbose:
-                print(f"  --- dry-run ({resolver}) ---\n{result.stdout}{result.stderr}")
-            checks.equal(f"dry-run with resolver {resolver} exits 0", result.returncode, 0)
+                print(f"  --- dry-run ({label}, {resolver}) ---\n{result.stdout}{result.stderr}")
+            checks.equal(f"dry-run ({label}, resolver {resolver}) exits 0", result.returncode, 0)
             checks.equal(
-                f"resolver {resolver}: DNS directive {'pinned' if pinned else 'omitted'}",
+                f"{label}, resolver {resolver}: DNS directive "
+                f"{'pinned' if pinned else 'omitted'}",
                 "DNS = 127.0.0.1" in result.stdout,
                 pinned,
             )
             checks.ok("dry-run leaves no workspace behind", not sandbox.runtime_dir.exists())
         finally:
             sandbox.close()
+    return not checks.failures
+
+
+def check_mtu_option(api: MockApi, *, verbose: bool) -> bool:
+    """`--mtu` is rendered; out-of-range values are rejected before connecting."""
+    checks = Checks("D: MTU option", verbose)
+    sandbox = Sandbox()
+    try:
+        result = sandbox.run("--dry-run", "--api-base", api.base_url, "--mtu", "1400")
+        if verbose:
+            print(f"  --- dry-run (--mtu 1400) ---\n{result.stdout}{result.stderr}")
+        checks.equal("dry-run with --mtu 1400 exits 0", result.returncode, 0)
+        checks.ok("MTU rendered", "MTU = 1400" in result.stdout, result.stdout)
+
+        bad = sandbox.run("--dry-run", "--api-base", api.base_url, "--mtu", "1200")
+        checks.equal("out-of-range MTU exits 2", bad.returncode, 2)
+        checks.ok("workspace removed after the rejected run", not sandbox.runtime_dir.exists())
+    finally:
+        sandbox.close()
     return not checks.failures
 
 
@@ -316,6 +342,7 @@ def main() -> int:
         passed = check_foreground_and_failover(api, verbose=verbose)
         passed = check_async_status_disconnect(api, verbose=verbose) and passed
         passed = check_dns_policies(api, verbose=verbose) and passed
+        passed = check_mtu_option(api, verbose=verbose) and passed
     finally:
         api.close()
 

@@ -42,7 +42,7 @@ from .state import ConnectionState, read_state, remove_state, write_state
 from .wgconfig import (
     DEFAULT_ADDRESS,
     DEFAULT_KEEPALIVE,
-    PROXY_DNS,
+    DEFAULT_MTU,
     enforce_dns_directory,
     render_config,
     resolver_already_in_use,
@@ -90,7 +90,12 @@ class ConnectOptions:
     country: str | None = None
     #: ``None`` derives the link name from the resolved country code.
     interface: str | None = None
-    dns: str | None = PROXY_DNS
+    #: Resolver to pin with a ``DNS`` directive; ``None`` leaves the system
+    #: resolver alone (the default).
+    dns: str | None = None
+    #: Link MTU; 1392 fits the smallest common WAN paths.  ``None`` leaves the
+    #: MTU out so wg-quick derives it from the physical interface.
+    mtu: int | None = DEFAULT_MTU
     address: str = DEFAULT_ADDRESS
     keepalive: int = DEFAULT_KEEPALIVE
     server_limit: int = 5
@@ -272,9 +277,10 @@ class NordUpService:
     def _effective_dns(self) -> str | None:
         """The resolver to pin, or ``None`` to leave ``/etc/resolv.conf`` alone.
 
-        A ``DNS`` directive makes wg-quick rewrite the system resolver; when the
-        system already resolves *only* through that address the rewrite is a
-        no-op and is skipped, avoiding wg-quick's `resolvconf` plumbing.
+        Pinning is opt-in because a ``DNS`` directive makes wg-quick rewrite the
+        system resolver through ``resolvconf``, which needs a working resolver
+        manager.  When the system already resolves *only* through the requested
+        address the rewrite is a no-op and is skipped.
         """
         dns = self.options.dns
         if dns is None:
@@ -302,6 +308,7 @@ class NordUpService:
                 server=server,
                 address=options.address,
                 dns=dns,
+                mtu=options.mtu,
                 keepalive=options.keepalive,
             )
             write_private(workspace.config_path, config)

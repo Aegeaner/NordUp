@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nord-up"
-version = "1.0.0"
-description = "Stateless NordVPN NordLynx (WireGuard) connector: live fastest-server selection, tmpfs-only configs, pinned DNS, zero residue."
+version = "2.0.0"
+description = "Stateless NordVPN NordLynx (WireGuard) connector: live fastest-server selection, tmpfs-only configs, opt-in DNS pinning, zero residue."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

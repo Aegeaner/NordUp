@@ -26,7 +26,7 @@ from .errors import (
 )
 from .service import ConnectOptions, ConnectResult, NordUpService
 from .state import ConnectionState
-from .wgconfig import DEFAULT_ADDRESS, DEFAULT_KEEPALIVE, PROXY_DNS
+from .wgconfig import DEFAULT_ADDRESS, DEFAULT_KEEPALIVE, DEFAULT_MTU
 
 __all__ = ["build_parser", "exit_code_for", "main"]
 
@@ -72,6 +72,10 @@ examples:
   nord-up -d                        disconnect and clean up
   nord-up -l                        list countries
   nord-up -c <country> --dry-run    print the config, touch nothing
+  sudo -E nord-up -c <country> --dns 127.0.0.1
+                                    pin a resolver (e.g. a local stub)
+  sudo -E nord-up -c <country> --mtu 1420
+                                    raise the link MTU on a full-MTU path
 """
 
 
@@ -119,14 +123,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="ADDR",
         help=(
-            "resolver pinned into every config (default: the local DNSCrypt-proxy "
-            f"at {PROXY_DNS}); skipped when the system already resolves through it"
+            "pin this resolver into every config instead of leaving the system "
+            "resolver alone; skipped when the system already resolves through it"
         ),
     )
     parser.add_argument(
-        "--no-dns",
-        action="store_true",
-        help="omit the DNS directive entirely and leave the system resolver untouched",
+        "--mtu",
+        type=int,
+        default=DEFAULT_MTU,
+        metavar="N",
+        help=(
+            f"WireGuard link MTU (default: {DEFAULT_MTU}, which fits PPPoE/DS-Lite "
+            "paths); raise to 1420 on a full-MTU path, lower to 1280 if needed"
+        ),
     )
     parser.add_argument("--address", default=DEFAULT_ADDRESS, help="tunnel client address")
     parser.add_argument(
@@ -187,15 +196,14 @@ def options_from_args(args: argparse.Namespace) -> ConnectOptions:
         raise UsageError(f"invalid country {args.country!r}: expected a country code or name")
     if args.servers < 1:
         raise UsageError("--servers must be at least 1")
-    if args.no_dns and args.dns is not None:
-        raise UsageError("--dns and --no-dns are mutually exclusive")
     if args.dns is not None and not args.dns.strip():
         raise UsageError("--dns must not be empty")
     return ConnectOptions(
         token=resolve_token(args),
         country=country,
         interface=args.interface,  # None -> derived from the resolved country
-        dns=_dns_from_args(args),
+        dns=args.dns,
+        mtu=args.mtu,
         address=args.address,
         keepalive=args.keepalive,
         server_limit=args.servers,
@@ -224,13 +232,6 @@ def _redact(config_text: str) -> str:
 
 def _optional_token(args: argparse.Namespace) -> str:
     return (args.token or os.environ.get("NORD_TOKEN") or "").strip()
-
-
-def _dns_from_args(args: argparse.Namespace) -> str | None:
-    """The resolver to pin, or ``None`` when DNS management is opted out."""
-    if args.no_dns:
-        return None
-    return args.dns if args.dns is not None else PROXY_DNS
 
 
 async def _list_countries(args: argparse.Namespace) -> int:
@@ -265,7 +266,7 @@ def _local_service(args: argparse.Namespace) -> NordUpService:
 
 
 def _print_connection(state: ConnectionState) -> None:
-    dns = state.dns if state.dns is not None else "system (local stub already in use)"
+    dns = state.dns if state.dns is not None else "system (not managed)"
     rows = (
         ("interface", f"{state.interface} (up)"),
         ("server", f"{state.server} ({state.endpoint})"),

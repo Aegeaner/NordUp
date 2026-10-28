@@ -1,10 +1,13 @@
 """WireGuard configuration rendering and DNS normalization.
 
-Every managed ``*.conf`` pins ``DNS`` to the local resolver before ``wg-quick
-up``, so the tunnel cannot fall back to the public resolvers NordVPN hands out.
-When ``/etc/resolv.conf`` already resolves *only* through that address (a local
-DNSCrypt-proxy on ``127.0.0.1`` by default), the rewrite is skipped: it would
-change nothing, and it would drag in wg-quick's ``resolvconf`` plumbing.
+A rendered config carries no ``DNS`` line by default, so ``wg-quick`` leaves the
+system resolver alone: the resolver the network handed out (Wi-Fi DHCP,
+systemd-resolved, ...) keeps working and wg-quick never invokes ``resolvconf``.
+
+Pinning is opt-in: with ``--dns ADDR`` every managed ``*.conf`` gets that
+resolver, so the tunnel cannot fall back to the public resolvers NordVPN hands
+out.  When ``/etc/resolv.conf`` already resolves *only* through that address the
+rewrite is skipped: it would change nothing.
 """
 
 from __future__ import annotations
@@ -22,10 +25,12 @@ __all__ = [
     "DEFAULT_ADDRESS",
     "DEFAULT_ALLOWED_IPS",
     "DEFAULT_KEEPALIVE",
+    "DEFAULT_MTU",
     "DEFAULT_RESOLV_CONF",
     "ENV_RESOLV_CONF",
+    "MAX_MTU",
+    "MIN_MTU",
     "PRIVATE_FILE_MODE",
-    "PROXY_DNS",
     "enforce_dns",
     "enforce_dns_directory",
     "enforce_dns_file",
@@ -34,11 +39,6 @@ __all__ = [
     "resolver_already_in_use",
     "resolver_nameservers",
 ]
-
-#: Local resolver address pinned into every generated/normalized config.  This
-#: is where a local DNSCrypt-proxy (or equivalent stub) listens by default, so
-#: the tunnel never falls back to the public resolvers NordVPN hands out.
-PROXY_DNS = "127.0.0.1"
 
 #: Point at a non-standard resolver configuration (containers, chroots, tests).
 ENV_RESOLV_CONF = "NORD_UP_RESOLV_CONF"
@@ -51,28 +51,46 @@ DEFAULT_ALLOWED_IPS: tuple[str, ...] = ("0.0.0.0/0", "::/0")
 #: Configs carry a private key: owner read/write only.
 PRIVATE_FILE_MODE = 0o600
 
+#: Accepted link MTUs.  1280 is the IPv6 minimum; above 1500 is pointless for
+#: a tunnel whose outer packet is larger than every physical link.
+MIN_MTU = 1280
+MAX_MTU = 1500
+
+#: Default link MTU.  WireGuard's outer packet adds 60 bytes over IPv4; 1392
+#: leaves 1452, which fits the smallest common WAN path (PPPoE 1492, DS-Lite
+#: 1452).  wg-quick's own derivation (physical MTU - 80) assumes a 1500 path
+#: and silently blackholes larger handshakes behind a reduced-MTU WAN.
+DEFAULT_MTU = 1392
+
 
 def render_config(
     *,
     private_key: str,
     server: Server,
     address: str = DEFAULT_ADDRESS,
-    dns: str | None = PROXY_DNS,
+    dns: str | None = None,
+    mtu: int | None = None,
     keepalive: int = DEFAULT_KEEPALIVE,
     allowed_ips: Sequence[str] = DEFAULT_ALLOWED_IPS,
 ) -> str:
     """Render a full-tunnel NordLynx WireGuard configuration.
 
-    ``dns`` becomes the ``DNS`` directive; pass ``None`` to omit it and leave
-    the system resolver — typically the local DNSCrypt-proxy — untouched.
+    ``dns`` becomes the ``DNS`` directive.  The default ``None`` omits it, so
+    ``wg-quick`` leaves the system resolver untouched.  ``mtu`` pins the link
+    MTU; the default ``None`` lets ``wg-quick`` derive it from the physical
+    interface.
     """
     if not allowed_ips:
         raise ConfigError("allowed_ips must not be empty")
+    if mtu is not None and not MIN_MTU <= mtu <= MAX_MTU:
+        raise ConfigError(f"mtu must be between {MIN_MTU} and {MAX_MTU}")
     dns_line = "" if dns is None else f"DNS = {_single_line(dns, 'DNS')}\n"
+    mtu_line = "" if mtu is None else f"MTU = {int(mtu)}\n"
     return (
         "[Interface]\n"
         f"PrivateKey = {_single_line(private_key, 'PrivateKey')}\n"
         f"Address = {_single_line(address, 'Address')}\n"
+        f"{mtu_line}"
         f"{dns_line}"
         "[Peer]\n"
         f"PublicKey = {_single_line(server.public_key, 'PublicKey')}\n"
@@ -108,15 +126,15 @@ def resolver_already_in_use(address: str, path: Path | None = None) -> bool:
     """True when ``address`` is the only resolver the system would consult.
 
     When it is, asking ``wg-quick`` to rewrite ``/etc/resolv.conf`` is a no-op:
-    the tunnel keeps using the local stub (DNSCrypt-proxy by default) either
-    way.  Skipping the rewrite also avoids wg-quick's ``resolvconf`` plumbing,
-    which needs a working ``systemd-resolved``/openresolv backend.
+    the tunnel keeps using that resolver either way.  Skipping the rewrite also
+    keeps wg-quick's ``resolvconf`` plumbing out of the picture, and with it the
+    need for a working ``systemd-resolved``/openresolv backend.
     """
     nameservers = resolver_nameservers(path)
     return bool(nameservers) and all(nameserver == address for nameserver in nameservers)
 
 
-def enforce_dns(text: str, dns: str = PROXY_DNS) -> str:
+def enforce_dns(text: str, dns: str) -> str:
     """Force ``DNS = <dns>`` in every ``[Interface]`` section.
 
     Existing ``DNS`` entries are replaced (duplicates collapsed); a missing one
@@ -159,7 +177,7 @@ def enforce_dns(text: str, dns: str = PROXY_DNS) -> str:
     return "\n".join(out) + "\n"
 
 
-def enforce_dns_file(path: Path, dns: str = PROXY_DNS) -> bool:
+def enforce_dns_file(path: Path, dns: str) -> bool:
     """Normalize one config in place; return ``True`` when bytes changed.
 
     The replacement is atomic (temp file + :func:`os.replace`) and the file is
@@ -181,7 +199,7 @@ def enforce_dns_file(path: Path, dns: str = PROXY_DNS) -> bool:
 
 
 def enforce_dns_directory(
-    directory: Path, dns: str = PROXY_DNS, pattern: str = "*.conf"
+    directory: Path, dns: str, pattern: str = "*.conf"
 ) -> list[Path]:
     """Normalize every matching config under ``directory``.
 

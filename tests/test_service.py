@@ -31,7 +31,7 @@ SERVERS = [
 
 @pytest.fixture(autouse=True)
 def _resolv_conf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Keep the DNS policy deterministic: a resolver that is not the pinned one."""
+    """Keep the DNS policy deterministic: a resolver that is never pinned by default."""
     resolv = tmp_path / "resolv.conf"
     resolv.write_text("nameserver 203.0.113.53\n")
     monkeypatch.setenv("NORD_UP_RESOLV_CONF", str(resolv))
@@ -127,19 +127,26 @@ def test_dry_run_renders_the_config_and_leaves_nothing(tmp_path: Path) -> None:
 
     assert result.state is None
     assert result.interface == LINK
-    assert "DNS = 127.0.0.1" in result.config_text
+    assert "DNS" not in result.config_text
+    assert "MTU = 1392" in result.config_text
     assert "Endpoint = 203.0.113.7:51820" in result.config_text
     assert wg.ups == []
     assert not (tmp_path / "run").exists()
 
 
+def test_dry_run_renders_the_requested_mtu(tmp_path: Path) -> None:
+    result = _up(tmp_path, FakeWG(), dry_run=True, mtu=1400)
+
+    assert "MTU = 1400" in result.config_text
+
+
 @pytest.mark.parametrize(("resolver", "pinned"), [("203.0.113.53", True), ("127.0.0.1", False)])
-def test_dns_is_pinned_unless_the_stub_already_is_the_resolver(
+def test_explicit_dns_is_pinned_unless_it_already_is_the_resolver(
     tmp_path: Path, _resolv_conf: Path, resolver: str, pinned: bool
 ) -> None:
     _resolv_conf.write_text(f"nameserver {resolver}\n")
 
-    result = _up(tmp_path, FakeWG(), dry_run=True)
+    result = _up(tmp_path, FakeWG(), dry_run=True, dns="127.0.0.1")
 
     assert ("DNS = 127.0.0.1" in result.config_text) is pinned
 
@@ -159,7 +166,7 @@ def test_up_leaves_the_tunnel_running_and_records_it(tmp_path: Path) -> None:
         "node7.example.net",
         "203.0.113.7:51820",
     )
-    assert (state.address, state.dns) == ("10.5.0.2/32", "127.0.0.1")
+    assert (state.address, state.dns) == ("10.5.0.2/32", None)
 
     with RuntimeWorkspace(LINK, root=tmp_path / "run"):
         pass  # the lock was released: the CLI process may exit

@@ -34,7 +34,7 @@ from nord_up.errors import (
 from nord_up.models import Country, Server
 from nord_up.service import ConnectionStatus, ConnectResult
 from nord_up.state import ConnectionState
-from nord_up.wgconfig import PROXY_DNS
+from nord_up.wgconfig import DEFAULT_MTU
 
 SERVER = Server(id=7, hostname="node7.example.net", station="203.0.113.7", public_key="test-pub-a")
 
@@ -66,7 +66,12 @@ def _stub_service(monkeypatch: pytest.MonkeyPatch, **handlers: Any) -> None:
 
 def test_parser_defaults_and_token_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
     args = build_parser().parse_args([])
-    assert (args.interface, args.dns, args.no_dns, args.foreground) == (None, None, False, False)
+    assert (args.interface, args.dns, args.mtu, args.foreground) == (
+        None,
+        None,
+        DEFAULT_MTU,
+        False,
+    )
 
     monkeypatch.setenv("NORD_TOKEN", "env-token")
     assert resolve_token(build_parser().parse_args([])) == "env-token"
@@ -92,13 +97,17 @@ def test_options_validate_country_dns_and_server_count(monkeypatch: pytest.Monke
     parse = build_parser().parse_args
 
     assert options_from_args(parse(["-c", "Zetland"])).country == "Zetland"
-    assert options_from_args(parse([])).dns == PROXY_DNS
+    assert options_from_args(parse([])).dns is None
+    assert options_from_args(parse([])).mtu == DEFAULT_MTU
     assert options_from_args(parse(["--dns", "10.0.0.1"])).dns == "10.0.0.1"
-    assert options_from_args(parse(["--no-dns"])).dns is None
+    assert options_from_args(parse(["--mtu", "1400"])).mtu == 1400
 
-    for argv in (["-c", "bad!"], ["--dns", "10.0.0.1", "--no-dns"], ["--servers", "0"]):
+    for argv in (["-c", "bad!"], ["--dns", "  "], ["--servers", "0"]):
         with pytest.raises(UsageError):
             options_from_args(parse(argv))
+
+    with pytest.raises(SystemExit):  # removed in 2.0; DNS is opt-in now
+        parse(["--no-dns"])
 
 
 def test_exit_codes_are_stable() -> None:
@@ -142,7 +151,7 @@ def test_dry_run_prints_the_redacted_config(
         return ConnectResult(
             interface="nordlynx_zz",
             server=SERVER,
-            config_text="[Interface]\nPrivateKey = test-secret\nDNS = 127.0.0.1\n",
+            config_text="[Interface]\nPrivateKey = test-secret\n",
         )
 
     _stub_service(monkeypatch, up=up)
